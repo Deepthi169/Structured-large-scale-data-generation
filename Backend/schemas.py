@@ -10,10 +10,12 @@ class ImageAnalysisCreate(BaseModel):
 
 # Response schema
 class ImageAnalysisResponse(BaseModel):
-    image_name: str
-    blip_caption: str
+    image_id: str
+    file_metadata: Dict[str, Any]  # original_size, resized_size, color_mode
+    quality_metrics: Dict[str, Any]  # blur_score, brightness, contrast
+    semantic_features: Dict[str, Any]  # clip_embedding, blip_caption
     yolo_objects: List[Dict[str, Any]]
-    clip_dim: int
+    object_count: int
     latency_seconds: float
 
     class Config:

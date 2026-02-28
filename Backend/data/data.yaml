@@ -1,0 +1,5 @@
+path: C:/Users/deept/Downloads/COPRO/Final_year_project/Backend/Structured-large-scale-data-generation/Backend/data
+train: images/train
+val: images/val
+nc: 1
+names: ['neem']
