@@ -145,7 +145,7 @@ uvicorn main:app --reload
 
 ### 3️⃣ Open API Documentation
 ```bash
-[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+http://127.0.0.1:8000/docs
 ```
 
 ### 4️⃣ Test Endpoints
