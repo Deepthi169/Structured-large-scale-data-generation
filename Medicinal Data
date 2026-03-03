@@ -1,0 +1,61 @@
+#web scraping
+import os
+import requests
+from bs4 import BeautifulSoup
+import time
+
+# Folder to save images
+save_path = r"D:\Medicinal Data\neem_images"
+os.makedirs(save_path, exist_ok=True)
+
+# Wikimedia Neem category page
+base_url = "https://commons.wikimedia.org"
+category_url = base_url + "/wiki/Category:Azadirachta_indica"
+
+headers = {"User-Agent": "Mozilla/5.0"}
+
+response = requests.get(category_url, headers=headers)
+soup = BeautifulSoup(response.text, "html.parser")
+
+count = 0
+
+# Find file page links (not thumbnails directly)
+file_links = soup.select("a.mw-file-description")
+
+for link in file_links:
+    if count >= 10:
+        break
+
+    file_page_url = base_url + link.get("href")
+
+    try:
+        # Open file page
+        file_page = requests.get(file_page_url, headers=headers)
+        file_soup = BeautifulSoup(file_page.text, "html.parser")
+
+        # Get full image URL
+        full_image_tag = file_soup.select_one("div.fullMedia a")
+        if not full_image_tag:
+            continue
+
+        img_url = full_image_tag.get("href")
+
+        if img_url.startswith("//"):
+            img_url = "https:" + img_url
+
+        # Download image
+        img_data = requests.get(img_url, headers=headers).content
+
+        filename = os.path.join(save_path, f"neem_{count+1}.jpg")
+        with open(filename, "wb") as f:
+            f.write(img_data)
+
+        print(f"Downloaded: {filename}")
+        count += 1
+
+        time.sleep(1)  # polite delay
+
+    except Exception as e:
+        print(f"Error processing {file_page_url}: {e}")
+
+print("Download completed!")
