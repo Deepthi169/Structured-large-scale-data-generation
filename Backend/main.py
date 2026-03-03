@@ -82,9 +82,8 @@ class YOLOExtractor:
         
         # Whitelist of plant-related keywords to keep
         plant_keywords = {
-            'neem', 'plant', 'leaf', 'leaves', 'tree', 'seedling', 'vegetation',
-            'shrub', 'bush', 'herb', 'flora', 'foliage', 'potted plant', 'stem',
-            'branch', 'green', 'tulasi', 'basil'
+            'neem', 'plant', 'leaf', 'leaves', 'vegetation', 'potted plant', 'stem',
+            'branch', 'green'
         }
 
         if results.boxes is None or len(results.boxes) == 0:
