@@ -138,19 +138,38 @@ API testing and validation are performed using **Postman**.
 pip install -r requirements.txt
 ```
 
-### 2️⃣ Run FastAPI Server
+### 2️⃣ Configure
+
+* **MongoDB** running on `mongodb://localhost:27017` (override with `MONGO_URI`). Data is stored in `db_final.medicinal_images`; the 146 records in `Data/Output/neem` are imported on first start.
+* **Classifier weights:** place the trained YOLOv8 classifier at `Backend/yolov8_cls_best.pt` (or set `YOLO_CLS_WEIGHTS`). Without it YOLO does not vote and every image is flagged.
+* **Hosted models (optional but recommended):** create `Backend/.env.local` (git-ignored) with
+  ```
+  NVIDIA_API_KEY=your-key
+  ```
+  This enables VLM image annotation, the VLM tiebreaker for flagged images, and the dataset chatbot. Override models with `NVIDIA_VLM_MODEL` / `NVIDIA_CHAT_MODEL`.
+
+### 3️⃣ Run the Backend
 ```bash
+cd Backend
 uvicorn main:app --reload
 ```
+API docs: `http://127.0.0.1:8000/docs`
 
-### 3️⃣ Open API Documentation
+### 4️⃣ Run the Frontend
 ```bash
-http://127.0.0.1:8000/docs
+cd Frontend
+npm install
+npm run dev
 ```
+If the backend is not on port 8000, create `Frontend/.env.local` with `VITE_API_URL=http://127.0.0.1:<port>`.
 
-### 4️⃣ Test Endpoints
+### 5️⃣ Using the App
 
-Use Postman to test API routes and dataset generation workflows.
+* **/analyze** – upload an image: YOLO + CLIP + BLIP vote, low-quality images are enhanced and retried, and a hosted VLM annotates the image and breaks ties.
+* **/search** – browse, filter and export (JSON/CSV) the structured dataset.
+* **/review** – confirm or correct the label of flagged images.
+* **/chat** – ask questions about the dataset in plain English.
+* **/dashboard** – dataset and pipeline overview.
 
 ---
 

@@ -5,6 +5,7 @@ const statusStyles = {
   Imported: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   Accepted: 'bg-green-500/20 text-green-400 border-green-500/30',
   Flagged: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
+  Reviewed: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
 }
 
 const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`)
@@ -39,7 +40,14 @@ const SearchResultCard = ({ data }) => {
             <span className="px-2.5 py-1 bg-blue-500/20 text-blue-300 text-xs rounded-full capitalize">{data.source}</span>
           </div>
 
-          <p className="text-gray-400 text-sm leading-relaxed mb-4">{data.caption || 'No caption'}</p>
+          <p className="text-gray-400 text-sm leading-relaxed mb-2">{data.caption || 'No caption'}</p>
+          {data.vlm && (
+            <p className="text-xs text-purple-300/80 mb-4">
+              VLM: <span className="capitalize">{data.vlm.species}</span>, {data.vlm.leaf_condition} leaves
+              {data.adjudicated && ' · confirmed by VLM'}
+            </p>
+          )}
+          {!data.vlm && <div className="mb-2" />}
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
             <Metric label="Sharpness" value={q.blur_score} />

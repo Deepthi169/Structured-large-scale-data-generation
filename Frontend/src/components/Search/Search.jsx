@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import SearchResultCard from './SearchResultCard'
-import { getJson } from '../../api'
+import { API_URL, getJson } from '../../api'
 
 const PAGE_SIZE = 20
 
 const filterOptions = {
   label: { title: 'Plant', options: [['', 'All'], ['neem', 'Neem'], ['tulasi', 'Tulasi']] },
   source: { title: 'Source', options: [['', 'All'], ['dataset', 'Dataset'], ['upload', 'Uploaded']] },
-  status: { title: 'Status', options: [['', 'All'], ['Imported', 'Imported'], ['Accepted', 'Accepted'], ['Flagged', 'Flagged']] },
+  status: { title: 'Status', options: [['', 'All'], ['Imported', 'Imported'], ['Accepted', 'Accepted'], ['Flagged', 'Flagged'], ['Reviewed', 'Reviewed']] },
 }
 
 const sortOptions = [
@@ -104,6 +104,8 @@ const Search = () => {
               >
                 Analyze an image
               </Link>
+              <Link to="/chat" className="text-sm text-gray-400 hover:text-white transition-colors">Ask AI</Link>
+              <Link to="/review" className="text-sm text-gray-400 hover:text-white transition-colors">Review</Link>
               <Link to="/dashboard" className="text-sm text-gray-400 hover:text-white transition-colors">
                 Dashboard
               </Link>
@@ -206,9 +208,21 @@ const Search = () => {
         ) : results.length > 0 ? (
           <>
             <div className="flex items-center justify-between mb-6">
-              <p className="text-gray-400">
-                Found <span className="text-white font-semibold">{total}</span> images
-              </p>
+              <div className="flex items-center gap-4">
+                <p className="text-gray-400">
+                  Found <span className="text-white font-semibold">{total}</span> images
+                </p>
+                <span className="text-xs text-gray-500">Export:</span>
+                {['json', 'csv'].map((fmt) => (
+                  <a
+                    key={fmt}
+                    href={`${API_URL}/export?${new URLSearchParams({ format: fmt, ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) })}`}
+                    className="text-xs px-2.5 py-1 bg-white/5 border border-white/10 text-gray-300 rounded-lg hover:bg-white/10 uppercase"
+                  >
+                    {fmt}
+                  </a>
+                ))}
+              </div>
               <select
                 value={sort}
                 onChange={(e) => { setPage(0); setSort(e.target.value) }}

@@ -1,10 +1,14 @@
+import csv
+import io
+import json
 from collections import Counter
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from schemas import ImageAnalysisCreate, ImageAnalysisResponse
 import records
+import llm
 from pydantic import BaseModel
 import torch
 import base64
@@ -331,6 +335,48 @@ def list_records(q: str = "", label: str = "", source: str = "", status: str = "
     return db_call(records.search, q, label, source, status, sort, min(limit, 100), max(skip, 0))
 
 
+class ReviewInput(BaseModel):
+    label: str
+
+
+@app.post("/records/{record_id}/review")
+def review_record(record_id: str, data: ReviewInput):
+    if data.label not in records.REVIEW_LABELS:
+        raise HTTPException(status_code=400, detail=f"label must be one of {sorted(records.REVIEW_LABELS)}")
+    doc = db_call(records.review, record_id, data.label)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return doc
+
+
+@app.get("/export")
+def export_records(format: str = "json", label: str = "", source: str = "", status: str = "",
+                   include_embeddings: bool = False):
+    if format not in ("json", "csv"):
+        raise HTTPException(status_code=400, detail="format must be json or csv")
+    docs = db_call(records.export_docs, label, source, status, include_embeddings)
+    if format == "json":
+        body = json.dumps(docs, indent=2, default=str)
+        return Response(body, media_type="application/json",
+                        headers={"Content-Disposition": 'attachment; filename="plant_dataset.json"'})
+
+    buf = io.StringIO()
+    cols = ["image_id", "source", "label", "model_label", "status", "caption", "blur_score", "brightness",
+            "contrast", "yolo_confidence", "clip_confidence", "vlm_species", "vlm_leaf_condition", "vlm_notes"]
+    writer = csv.writer(buf)
+    writer.writerow(cols)
+    for d in docs:
+        q, v = d.get("quality_metrics") or {}, d.get("vlm") or {}
+        writer.writerow([
+            d.get("image_id"), d.get("source"), d.get("label"), d.get("model_label"), d.get("status"),
+            d.get("caption"), q.get("blur_score"), q.get("brightness"), q.get("contrast"),
+            d.get("yolo_confidence"), d.get("clip_confidence"),
+            v.get("species"), v.get("leaf_condition"), v.get("notes"),
+        ])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": 'attachment; filename="plant_dataset.csv"'})
+
+
 @app.get("/records/{record_id}")
 def get_record(record_id: str):
     doc = db_call(records.get, record_id)
@@ -342,6 +388,45 @@ def get_record(record_id: str):
 @app.get("/stats")
 def get_stats():
     return db_call(records.stats)
+
+
+class ChatInput(BaseModel):
+    message: str
+
+
+@app.post("/chat")
+def chat(data: ChatInput):
+    """Natural-language questions over the dataset: LLM -> validated filters -> real query -> LLM answer."""
+    if not llm.enabled():
+        raise HTTPException(status_code=503, detail="NVIDIA_API_KEY is not configured on the backend")
+    question = data.message.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Empty message")
+    try:
+        filters = llm.question_to_filters(question)
+        if filters["intent"] == "stats":
+            stats = db_call(records.stats)
+            stats.pop("recent", None)
+            facts, items = {"stats": stats}, []
+        else:
+            found = db_call(
+                records.search, filters["q"], filters["label"], filters["source"],
+                filters["status"], filters["sort"], 6, 0,
+            )
+            items = found["items"]
+            facts = {
+                "total_matches": found["total"],
+                "shown": [
+                    {k: it.get(k) for k in ("image_id", "label", "status", "caption", "quality_metrics")}
+                    for it in items
+                ],
+            }
+        answer = llm.write_answer(question, {"filters_used": filters, **facts})
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"answer": answer, "filters": filters, "items": items}
 
 # ================= GET APIs ================= #
 
@@ -409,7 +494,7 @@ def analyze_path(file_path: str):
 async def analyze_image(data: ImageAnalysisCreate):
     try:
         # save incoming base64 payload to disk so the detectors can read it
-        file_path = os.path.join(UPLOAD_DIR, data.name)
+        file_path = os.path.join(UPLOAD_DIR, os.path.basename(data.name))
         image_bytes = base64.b64decode(data.body)
         with open(file_path, "wb") as f:
             f.write(image_bytes)
@@ -450,6 +535,21 @@ async def analyze_agentic(file: UploadFile = File(...)):
             raise ValueError("Could not read image")
         result["image_id"] = os.path.basename(file_path)
         result["yolo_classifier_loaded"] = yolo_classifier.model is not None
+
+        # Hosted VLM: structured annotation, and a tiebreaker for images the local models flag.
+        result["vlm"] = llm.annotate_image(file_path)
+        result["adjudicated"] = False
+        vlm = result["vlm"]
+        if (
+            result["status"] == "FLAG_FOR_REVIEW"
+            and vlm
+            and vlm["species"] in PLANT_CLASSES
+            and vlm["species"] == result["consensus_label"]
+            and vlm["confidence"] >= 0.7
+        ):
+            result["status"] = "ACCEPT"
+            result["adjudicated"] = True
+            result["votes"]["vlm"] = vlm["species"]
         result["latency_seconds"] = round(time.time() - start, 2)
         try:
             records.save_upload(result)
@@ -463,7 +563,7 @@ async def analyze_agentic(file: UploadFile = File(...)):
 @app.post("/analyze-file", response_model=ImageAnalysisResponse)
 async def analyze_file(file: UploadFile = File(...)):
     try:
-        file_path = os.path.join(UPLOAD_DIR, file.filename)
+        file_path = os.path.join(UPLOAD_DIR, os.path.basename(file.filename or "upload.jpg"))
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)

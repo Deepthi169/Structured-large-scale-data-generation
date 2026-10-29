@@ -74,6 +74,8 @@ def save_upload(result):
         "agreement_ratio": result["agreement_ratio"],
         "votes": result["votes"],
         "retry_count": result["retry_count"],
+        "vlm": result.get("vlm"),
+        "adjudicated": result.get("adjudicated", False),
         "yolo_confidence": result["yolo_confidence"],
         "clip_confidence": result["clip_confidence"],
         "caption": result["caption"],
@@ -111,6 +113,38 @@ def search(q="", label="", source="", status="", sort="newest", limit=20, skip=0
         .limit(limit)
     )
     return {"total": col.count_documents(flt), "items": list(cursor)}
+
+
+REVIEW_LABELS = {"neem", "tulasi", "other"}
+
+
+def review(record_id, label):
+    """Record a human decision for an image; keeps the model's original label."""
+    if label not in REVIEW_LABELS:
+        raise ValueError(f"label must be one of {sorted(REVIEW_LABELS)}")
+    col = collection()
+    doc = col.find_one({"_id": record_id}, {"label": 1, "model_label": 1})
+    if doc is None:
+        return None
+    col.update_one(
+        {"_id": record_id},
+        {"$set": {
+            "label": label,
+            "status": "Reviewed",
+            "model_label": doc.get("model_label", doc.get("label")),
+            "reviewed_at": _now(),
+        }},
+    )
+    return col.find_one({"_id": record_id}, {"clip_embedding": 0})
+
+
+EXPORT_LIMIT = 10000
+
+
+def export_docs(label="", source="", status="", include_embeddings=False):
+    flt = {k: v for k, v in (("label", label), ("source", source), ("status", status)) if v}
+    projection = None if include_embeddings else {"clip_embedding": 0}
+    return list(collection().find(flt, projection).sort("image_id", 1).limit(EXPORT_LIMIT))
 
 
 def get(record_id):

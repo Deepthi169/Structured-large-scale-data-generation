@@ -5,6 +5,8 @@ import Signup from './components/Auth/Signup'
 import Search from './components/Search/Search'
 import Dashboard from './components/Dashboard/Dashboard'
 import Analyze from './components/Analyze/Analyze'
+import Chat from './components/Chat/Chat'
+import Review from './components/Review/Review'
 
 function App() {
   return (
@@ -16,6 +18,8 @@ function App() {
         <Route path="/search" element={<Search />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/analyze" element={<Analyze />} />
+        <Route path="/chat" element={<Chat />} />
+        <Route path="/review" element={<Review />} />
       </Routes>
     </Router>
   )

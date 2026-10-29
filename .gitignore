@@ -1,0 +1,6 @@
+# secrets
+Backend/.env.local
+.env.local
+
+# python
+__pycache__/

@@ -116,6 +116,22 @@ const Analyze = () => {
                 <Stat label="Enhancement retries" value={result.retry_count} />
               </div>
 
+              {result.vlm ? (
+                <div className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-3 text-sm">
+                  <p className="text-xs text-purple-300 mb-1">
+                    Hosted VLM annotation{result.adjudicated && ' · tiebreaker: confirmed the consensus label'}
+                  </p>
+                  <p className="text-gray-200">
+                    <span className="capitalize">{result.vlm.species}</span> ({Math.round(result.vlm.confidence * 100)}%),{' '}
+                    {result.vlm.leaf_condition} leaves
+                    {result.vlm.visible_parts.length > 0 && `, visible: ${result.vlm.visible_parts.join(', ')}`}
+                  </p>
+                  {result.vlm.notes && <p className="text-gray-400 mt-1">{result.vlm.notes}</p>}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">Hosted VLM annotation unavailable.</p>
+              )}
+
               <div>
                 <p className="text-xs text-gray-500 mb-1">BLIP caption</p>
                 <p className="text-gray-300">{result.caption}</p>
