@@ -1,6 +1,10 @@
+from collections import Counter
+
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from schemas import ImageAnalysisCreate, ImageAnalysisResponse
+import records
 from pydantic import BaseModel
 import torch
 import base64
@@ -79,17 +83,16 @@ class YOLOExtractor:
         results = self.model(image_path, conf=0.10, iou=0.45)[0]
 
         objects = []
-        
+
         # Whitelist of plant-related keywords to keep
         plant_keywords = {
             'neem', 'plant', 'leaf', 'leaves', 'vegetation', 'potted plant', 'stem',
             'branch', 'green'
         }
 
-        if results.boxes is None or len(results.boxes) == 0:
-            return []
+        boxes = results.boxes if results.boxes is not None else []
 
-        for box in results.boxes:
+        for box in boxes:
             cls_id = int(box.cls)
             label = results.names.get(cls_id, "unknown")
             label_lower = label.lower()
@@ -128,6 +131,131 @@ class YOLOExtractor:
 clip_extractor = CLIPExtractor()
 blip_extractor = BLIPExtractor()
 yolo_extractor = YOLOExtractor()
+
+# ================= AGENTIC CONSENSUS (from models/new copro.ipynb) ================= #
+
+PLANT_CLASSES = ["neem", "tulasi"]
+# Weights of the YOLOv8 classifier trained in the notebook
+# (Colab: runs/classify/train/weights/best.pt). Override with YOLO_CLS_WEIGHTS.
+CLS_WEIGHTS = os.environ.get(
+    "YOLO_CLS_WEIGHTS", os.path.join(BASE_DIR, "yolov8_cls_best.pt")
+)
+
+
+class YOLOClassifier:
+    def __init__(self):
+        if os.path.exists(CLS_WEIGHTS):
+            print(f"Loading plant classifier: {CLS_WEIGHTS}")
+            self.model = YOLO(CLS_WEIGHTS)
+        else:
+            print(f"Classifier weights {CLS_WEIGHTS} not found; YOLO will not vote.")
+            self.model = None
+
+    def predict(self, image_bgr):
+        if self.model is None:
+            return None, 0.0
+        results = self.model.predict(source=image_bgr, imgsz=640, verbose=False)
+        if not results or results[0].probs is None:
+            return None, 0.0
+        probs = results[0].probs
+        return self.model.names[int(probs.top1)], float(probs.top1conf)
+
+
+class CLIPZeroShot:
+    def __init__(self, extractor: CLIPExtractor):
+        self.model = extractor.model
+        self.preprocess = extractor.preprocess
+        tokenizer = open_clip.get_tokenizer("ViT-B-32")
+        tokens = tokenizer([f"a photo of a {c} leaf" for c in PLANT_CLASSES])
+        with torch.no_grad():
+            text = self.model.encode_text(tokens)
+            self.text_features = text / text.norm(dim=-1, keepdim=True)
+
+    def predict(self, image_bgr):
+        pil = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+        with torch.no_grad():
+            feat = self.model.encode_image(self.preprocess(pil).unsqueeze(0))
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+            sim = (100.0 * feat @ self.text_features.T).softmax(dim=-1)
+            conf, idx = sim[0].topk(1)
+        return PLANT_CLASSES[idx[0].item()], conf[0].item(), feat.cpu().numpy().flatten().tolist()
+
+
+def blip_predict(image_bgr):
+    pil = Image.fromarray(cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB))
+    inputs = blip_extractor.processor(pil, return_tensors="pt")
+    with torch.no_grad():
+        out = blip_extractor.model.generate(**inputs)
+    caption = blip_extractor.processor.decode(out[0], skip_special_tokens=True).lower()
+    label = next((c for c in PLANT_CLASSES if c in caption), None)
+    return label, caption
+
+
+def quality_from_bgr(image_bgr):
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    return {
+        "blur_score": round(float(cv2.Laplacian(gray, cv2.CV_64F).var()), 3),
+        "brightness": round(float(np.mean(gray) / 255.0), 3),
+        "contrast": round(float(np.std(gray) / 255.0), 3),
+    }
+
+
+def enhance_image(image, q):
+    """Adaptive enhancement: CLAHE for contrast, unsharp mask for blur, gamma for brightness."""
+    out = image.copy()
+    if q["contrast"] < 0.18:
+        l, a, b = cv2.split(cv2.cvtColor(out, cv2.COLOR_BGR2LAB))
+        l = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(l)
+        out = cv2.cvtColor(cv2.merge((l, a, b)), cv2.COLOR_LAB2BGR)
+    if q["blur_score"] < 150.0:
+        out = cv2.addWeighted(out, 1.5, cv2.GaussianBlur(out, (0, 0), 2.0), -0.5, 0)
+    if q["brightness"] < 0.35:
+        table = np.array([((i / 255.0) ** (1.0 / 1.4)) * 255 for i in range(256)]).astype("uint8")
+        out = cv2.LUT(out, table)
+    return out
+
+
+yolo_classifier = YOLOClassifier()
+clip_zero_shot = CLIPZeroShot(clip_extractor)
+
+
+def agentic_process(image_path: str, max_retries: int = 2):
+    """YOLO/CLIP/BLIP vote; re-enhance and retry until accepted or flagged for review."""
+    current = cv2.imread(image_path)
+    if current is None:
+        return None
+
+    for retry_count in range(max_retries + 1):
+        q = quality_from_bgr(current)
+        yolo_cls, yolo_conf = yolo_classifier.predict(current)
+        clip_cls, clip_conf, clip_emb = clip_zero_shot.predict(current)
+        blip_cls, caption = blip_predict(current)
+
+        votes = {"yolo": yolo_cls, "clip": clip_cls, "blip": blip_cls}
+        valid = [v for v in votes.values() if v is not None]
+        consensus, agreement = None, "0/3"
+        if valid:
+            consensus, n = Counter(valid).most_common(1)[0]
+            agreement = f"{n}/3"
+
+        accept = (
+            (agreement == "3/3" and yolo_conf >= 0.75 and clip_conf >= 0.75)
+            or (agreement == "2/3" and yolo_cls == consensus and yolo_conf >= 0.80)
+        )
+        if accept or retry_count == max_retries:
+            return {
+                "status": "ACCEPT" if accept else "FLAG_FOR_REVIEW",
+                "consensus_label": consensus,
+                "agreement_ratio": agreement,
+                "retry_count": retry_count,
+                "votes": votes,
+                "quality_metrics": q,
+                "yolo_confidence": round(yolo_conf, 3),
+                "clip_confidence": round(clip_conf, 3),
+                "caption": caption,
+                "clip_embedding": clip_emb,
+            }
+        current = enhance_image(current, q)
 
 
 # ================= QUALITY METRICS ================= #
@@ -168,7 +296,52 @@ app = FastAPI(
     description="CLIP + BLIP + YOLO (Base64 JSON)"
 )
 
+# The React dev server runs on a different origin (localhost:3000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
+app.mount("/dataset-images", StaticFiles(directory=records.IMAGES_DIR), name="dataset-images")
+
+
+@app.on_event("startup")
+def seed_records():
+    try:
+        n = records.seed_dataset()
+        if n:
+            print(f"Seeded {n} dataset records into {records.DB_NAME}.{records.COLLECTION}")
+    except Exception as e:
+        print(f"MongoDB unavailable, records API disabled: {e}")
+
+
+def db_call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {e}")
+
+
+@app.get("/records")
+def list_records(q: str = "", label: str = "", source: str = "", status: str = "",
+                 sort: str = "newest", limit: int = 20, skip: int = 0):
+    return db_call(records.search, q, label, source, status, sort, min(limit, 100), max(skip, 0))
+
+
+@app.get("/records/{record_id}")
+def get_record(record_id: str):
+    doc = db_call(records.get, record_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return doc
+
+
+@app.get("/stats")
+def get_stats():
+    return db_call(records.stats)
 
 # ================= GET APIs ================= #
 
@@ -252,6 +425,40 @@ async def analyze_image(data: ImageAnalysisCreate):
 
 # new convenience endpoint that accepts a regular multipart/form-data upload
 from fastapi import File, UploadFile
+
+
+@app.get("/agentic-status")
+def agentic_status():
+    return {
+        "classes": PLANT_CLASSES,
+        "yolo_classifier_loaded": yolo_classifier.model is not None,
+        "weights_path": CLS_WEIGHTS,
+    }
+
+
+@app.post("/analyze-agentic")
+async def analyze_agentic(file: UploadFile = File(...)):
+    try:
+        file_path = os.path.join(UPLOAD_DIR, os.path.basename(file.filename or "upload.jpg"))
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+        Image.open(file_path).verify()
+
+        start = time.time()
+        result = agentic_process(file_path)
+        if result is None:
+            raise ValueError("Could not read image")
+        result["image_id"] = os.path.basename(file_path)
+        result["yolo_classifier_loaded"] = yolo_classifier.model is not None
+        result["latency_seconds"] = round(time.time() - start, 2)
+        try:
+            records.save_upload(result)
+            result["saved"] = True
+        except Exception:
+            result["saved"] = False  # analysis still returned if MongoDB is down
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/analyze-file", response_model=ImageAnalysisResponse)
 async def analyze_file(file: UploadFile = File(...)):

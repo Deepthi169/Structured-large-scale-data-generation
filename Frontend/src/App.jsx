@@ -4,6 +4,7 @@ import Login from './components/Auth/Login'
 import Signup from './components/Auth/Signup'
 import Search from './components/Search/Search'
 import Dashboard from './components/Dashboard/Dashboard'
+import Analyze from './components/Analyze/Analyze'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/search" element={<Search />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/analyze" element={<Analyze />} />
       </Routes>
     </Router>
   )

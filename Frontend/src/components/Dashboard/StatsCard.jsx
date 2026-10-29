@@ -1,6 +1,6 @@
 import React from 'react'
 
-const StatsCard = ({ title, value, change, trend, icon, color }) => {
+const StatsCard = ({ title, value, subtitle, change, trend, icon, color }) => {
   const colorConfig = {
     purple: {
       text: 'text-purple-400',
@@ -43,7 +43,9 @@ const StatsCard = ({ title, value, change, trend, icon, color }) => {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      {subtitle && <p className="text-slate-500 text-sm">{subtitle}</p>}
+
+      {change && <div className="flex items-center gap-2">
         <span className={`inline-flex items-center text-sm font-semibold ${trend === 'up' ? 'text-green-400' : 'text-red-400'}`}>
           {trend === 'up' ? (
             <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -57,7 +59,7 @@ const StatsCard = ({ title, value, change, trend, icon, color }) => {
           {change}
         </span>
         <span className="text-slate-500 text-sm">vs last period</span>
-      </div>
+      </div>}
     </div>
   )
 }
